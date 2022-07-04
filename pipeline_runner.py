@@ -1,9 +1,10 @@
 import argparse
-
+import itertools
 import numpy as np
 import os
 import pandas as pd
-import sys
+from utils import read_df_file
+
 
 def mac_matrix2similarity_matrix(input_matrix):
     """
@@ -74,13 +75,8 @@ def genotype2_mac_matrix(genotypes, individual_names):
     assert np.max(matrix012) <= 2, "ERROR Parsing STRUCTURE file"
     return matrix012.astype(float), output_individual_names
 
-def genepop2genotype(file_path, output_dir):
-    if file_path.endswith(".xlsx"):
-        raw_data = pd.read_excel(file_path)
-    elif file_path.endswith(".csv"):
-        raw_data = pd.read_csv(file_path)
-    else:
-        assert False, "ERROR Parsing GENEpop format file"
+def filter_bad_snps_and_samples(file_path, output_dir):
+    raw_data = read_df_file(file_path)
     num_of_indv = len(raw_data.ID)
     num_of_snps = len(raw_data.columns) - 1  # -1 for ID column
     snps_to_reomve = []
@@ -100,11 +96,23 @@ def genepop2genotype(file_path, output_dir):
     with open(output_dir + 'snps_removed_by_fails.txt', "w+") as f:
         for snp in snps_to_reomve:
             f.write(f'{snp}\n')
-    filtered_indv_df = raw_data[~raw_data["ID"].isin(individuals_to_remove)]
-    filtered_df = filtered_indv_df.loc[:, ~filtered_indv_df.columns.isin(snps_to_reomve)]
-    filtered_path = output_dir + 'filtered_by_fails.csv'
+    # filtered_indv_df = raw_data[~raw_data["ID"].isin(individuals_to_remove)]
+    # filtered_df = filtered_indv_df.loc[:, ~filtered_indv_df.columns.isin(snps_to_reomve)]
+    filtered_df = raw_data.loc[:, ~raw_data.columns.isin(snps_to_reomve)]
+    filtered_path = output_dir + 'filtered_by_bad_snps.csv'
     filtered_df.to_csv(filtered_path, index=False)
     return filtered_path
+
+def remove_samples_by_fails(file_path, output):
+    unfiltered_data = read_df_file(file_path)
+    with open(output + 'individual_removed_by_fails.txt', 'r') as f:
+        individuals_to_remove_list = f.read().split('\n')
+    filtered_df = unfiltered_data[~unfiltered_data["ID"].isin(individuals_to_remove_list)]
+    filtered_path = output + 'filtered_by_bad_samples.csv'
+    filtered_df.to_csv(filtered_path, index=False)
+
+
+
 
 def assign_ref_allele(data_df):
     snps_names = list(data_df.columns)
@@ -142,7 +150,7 @@ def compute_genotype_error(reapeted_file, input, output):
     Returns:
 
     """
-    repeat = pd.read_excel(reapeted_file).dropna()
+    repeat = read_df_file(reapeted_file).dropna()
     if "ID" in list(repeat.iloc[0]):
         repeat = repeat.drop([min(repeat.index)])
     data = pd.read_csv(input)
@@ -152,40 +160,20 @@ def compute_genotype_error(reapeted_file, input, output):
         rep_indv_names = list(repeat[rep])
         rep_data = data[data["ID"].isin(list(rep_indv_names))]
         mac_matrix = genepop2012matrix(rep_data, name_to_ref)
-        df_per_rep[rep] = mac_matrix
+        df_per_rep[rep] = mac_matrix.reset_index()
     genotype_fails = {}
-    for rep1 in repeat.columns:
-        rep1_matrix = df_per_rep[rep1]
-        for rep2 in repeat.columns:
-            rep2_matrix = df_per_rep[rep2]
-            errors_include_fails = 0
-            errors_exclude_fails = 0
-            sum_valid_sytes = 0
-            for _, row in rep1_matrix.iterrows():
-                rep1_indv_name = row["ID"]
-                rep2_indv_name = list(repeat[repeat[rep1] == rep1_indv_name][rep2])[0]
-                if rep1 == rep2:
-                    assert rep1_indv_name == rep2_indv_name
-                else:
-                    assert rep1_indv_name != rep2_indv_name
-                rep2_row = rep2_matrix[rep2_matrix["ID"] == rep2_indv_name]
-                rep1_args = np.array(row)[1:].astype(float)
-                rep2_args = np.array(rep2_row.iloc[0])[1:].astype(float)
-                errors_with_fails = np.sum(rep1_args != rep2_args) - np.sum(np.isnan(rep1_args) & np.isnan(rep2_args))
-                valid = np.where(~np.isnan(rep1_args + rep2_args))[0]
-                errors_without_fails = np.sum(rep1_args[valid] != rep2_args[valid])
-                sum_valid_sytes += valid.size
-                assert errors_with_fails >= 0
-                assert errors_without_fails >= 0
-                errors_include_fails += errors_with_fails
-                errors_exclude_fails += errors_without_fails
+    snp_names = list(data.columns)
+    snp_names.remove('ID')
+    combinations_array = np.array(list(itertools.combinations(np.arange(len(repeat.columns)), 2)))
+    for snp in snp_names:
+        snp_df = pd.DataFrame(data={rep_name: df[snp] for rep_name, df in df_per_rep.items()})
+        snp_matrix = snp_df.to_numpy()
+        comparisons_matrix = np.abs(snp_matrix[:, combinations_array[:, 0]] - snp_matrix[:, combinations_array[:, 1]]) / 2
+        genotype_fails[snp] = [np.nanmean(comparisons_matrix)]
 
-            genotype_error_include_fails.at[rep1, rep2] = errors_include_fails / rep1_matrix.size
-    excluded_fails_path = output + 'genotype_error_exclude_fails.csv'
-    genotype_error_include_fails.to_csv(excluded_fails_path, index=False)
-    errors_include_fails_path = output + 'genotype_error_include_fails.csv'
-    genotype_error_include_fails.to_csv(errors_include_fails_path, index=False)
-    print()
+    fails_output = output + 'genotype_errors.csv'
+    pd.DataFrame(genotype_fails).to_csv(fails_output)
+
 
 def args_parser():
     parser = argparse.ArgumentParser()
@@ -202,8 +190,9 @@ def args_parser():
 
 if __name__ == '__main__':
     arguments = args_parser()
-    filtered_path = genepop2genotype(arguments.input, arguments.output)
+    filtered_path = filter_bad_snps_and_samples(arguments.input, arguments.output)
     compute_genotype_error(arguments.repeated, filtered_path, arguments.output)
+    remove_samples_by_fails(arguments.output + 'filtered_by_bad_snps.csv', arguments.output)
     # matrix012, individual_names = genotype2_mac_matrix(genotypes, individual_names)
     # similarity_matrix = mac_matrix2similarity_matrix(matrix012)
     # similarity_to_csv(similarity_matrix, individual_names, output_file_path)
