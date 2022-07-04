@@ -75,8 +75,12 @@ def genotype2_mac_matrix(genotypes, individual_names):
     return matrix012.astype(float), output_individual_names
 
 def genepop2genotype(file_path, output_dir):
-    assert file_path.endswith(".xlsx"), "ERROR Parsing GENEpop format file"
-    raw_data = pd.read_excel(file_path)
+    if file_path.endswith(".xlsx"):
+        raw_data = pd.read_excel(file_path)
+    elif file_path.endswith(".csv"):
+        raw_data = pd.read_csv(file_path)
+    else:
+        assert False, "ERROR Parsing GENEpop format file"
     num_of_indv = len(raw_data.ID)
     num_of_snps = len(raw_data.columns) - 1  # -1 for ID column
     snps_to_reomve = []
@@ -118,11 +122,26 @@ def assign_ref_allele(data_df):
 
 def genepop2012matrix(df, name_to_ref):
     minor_allele_count_df = df.copy()
-    for snp_name, ref in name_to_ref.items():
-        minor_allele_count_df[snp_name] = minor_allele_count_df[snp_name].apply(lambda x: x.count(ref) if x != "FAIL" else np.nan)
+    snps_names = list(df.columns)
+    snps_names.remove("ID")
+    for snp_name in snps_names:
+        if snp_name in name_to_ref.keys():
+            minor_allele_count_df[snp_name] = minor_allele_count_df[snp_name].apply(lambda x: x.count(name_to_ref[snp_name]) if x != "FAIL" else np.nan)
+        else:
+            minor_allele_count_df[snp_name] = minor_allele_count_df[snp_name].apply(lambda x: np.nan)
     return minor_allele_count_df
 
 def compute_genotype_error(reapeted_file, input, output):
+    """
+    Compute the genotype error value. There are 2 formulas
+    Args:
+        reapeted_file:
+        input:
+        output:
+
+    Returns:
+
+    """
     repeat = pd.read_excel(reapeted_file).dropna()
     if "ID" in list(repeat.iloc[0]):
         repeat = repeat.drop([min(repeat.index)])
@@ -134,15 +153,14 @@ def compute_genotype_error(reapeted_file, input, output):
         rep_data = data[data["ID"].isin(list(rep_indv_names))]
         mac_matrix = genepop2012matrix(rep_data, name_to_ref)
         df_per_rep[rep] = mac_matrix
-    genotype_error_include_fails = pd.DataFrame(columns=repeat.columns,
-                                                index=repeat.columns)
-    genotype_error_exclude_fails = pd.DataFrame(columns=repeat.columns,
-                                                index=repeat.columns)
+    genotype_fails = {}
     for rep1 in repeat.columns:
         rep1_matrix = df_per_rep[rep1]
         for rep2 in repeat.columns:
             rep2_matrix = df_per_rep[rep2]
             errors_include_fails = 0
+            errors_exclude_fails = 0
+            sum_valid_sytes = 0
             for _, row in rep1_matrix.iterrows():
                 rep1_indv_name = row["ID"]
                 rep2_indv_name = list(repeat[repeat[rep1] == rep1_indv_name][rep2])[0]
@@ -154,9 +172,20 @@ def compute_genotype_error(reapeted_file, input, output):
                 rep1_args = np.array(row)[1:].astype(float)
                 rep2_args = np.array(rep2_row.iloc[0])[1:].astype(float)
                 errors_with_fails = np.sum(rep1_args != rep2_args) - np.sum(np.isnan(rep1_args) & np.isnan(rep2_args))
+                valid = np.where(~np.isnan(rep1_args + rep2_args))[0]
+                errors_without_fails = np.sum(rep1_args[valid] != rep2_args[valid])
+                sum_valid_sytes += valid.size
                 assert errors_with_fails >= 0
+                assert errors_without_fails >= 0
                 errors_include_fails += errors_with_fails
+                errors_exclude_fails += errors_without_fails
 
+            genotype_error_include_fails.at[rep1, rep2] = errors_include_fails / rep1_matrix.size
+    excluded_fails_path = output + 'genotype_error_exclude_fails.csv'
+    genotype_error_include_fails.to_csv(excluded_fails_path, index=False)
+    errors_include_fails_path = output + 'genotype_error_include_fails.csv'
+    genotype_error_include_fails.to_csv(errors_include_fails_path, index=False)
+    print()
 
 def args_parser():
     parser = argparse.ArgumentParser()
