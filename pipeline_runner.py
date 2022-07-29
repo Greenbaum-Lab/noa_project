@@ -1,9 +1,9 @@
-import argparse
 import itertools
 import numpy as np
 import os
 import pandas as pd
-from utils import read_df_file
+from utils import read_df_file, args_parser
+import matplotlib.pyplot as plt
 
 
 def mac_matrix2similarity_matrix(input_matrix):
@@ -103,6 +103,7 @@ def filter_bad_snps_and_samples(file_path, output_dir):
     filtered_df.to_csv(filtered_path, index=False)
     return filtered_path
 
+
 def remove_samples_by_fails(file_path, output):
     unfiltered_data = read_df_file(file_path)
     with open(output + 'individual_removed_by_fails.txt', 'r') as f:
@@ -110,7 +111,6 @@ def remove_samples_by_fails(file_path, output):
     filtered_df = unfiltered_data[~unfiltered_data["ID"].isin(individuals_to_remove_list)]
     filtered_path = output + 'filtered_by_bad_samples.csv'
     filtered_df.to_csv(filtered_path, index=False)
-
 
 
 
@@ -161,31 +161,27 @@ def compute_genotype_error(reapeted_file, input, output):
         rep_data = data[data["ID"].isin(list(rep_indv_names))]
         mac_matrix = genepop2012matrix(rep_data, name_to_ref)
         df_per_rep[rep] = mac_matrix.reset_index()
-    genotype_fails = {}
+    d3_mat = np.concatenate([np.expand_dims(pd.DataFrame.to_numpy(x), axis=0) for x in df_per_rep.values()], axis=0)
+    d3_mat = d3_mat[:, :, 1:]
+    for i in range(d3_mat.shape[1]):
+        assert np.all(d3_mat[:, i, 0] == list(repeat.iloc[i])), f"line {i} is not aligned between repeats and matrix." \
+                                                                f"Developer bug. Contact Shahar"
+    d3_mat = d3_mat[:, :, 1:]
     snp_names = list(data.columns)
+    genotype_fails = {}
     snp_names.remove('ID')
-    combinations_array = np.array(list(itertools.combinations(np.arange(len(repeat.columns)), 2)))
-    for snp in snp_names:
-        snp_df = pd.DataFrame(data={rep_name: df[snp] for rep_name, df in df_per_rep.items()})
-        snp_matrix = snp_df.to_numpy()
-        comparisons_matrix = np.abs(snp_matrix[:, combinations_array[:, 0]] - snp_matrix[:, combinations_array[:, 1]]) / 2
-        genotype_fails[snp] = [np.nanmean(comparisons_matrix)]
+    max_min_diff = np.max(d3_mat, axis=0) - np.min(d3_mat, axis=0)
+    same_counter = np.count_nonzero(max_min_diff == 0, axis=0)
+    for idx, snp_name in enumerate(snp_names):
+        genotype_fails[snp_name] = [1 - ((same_counter[idx] / d3_mat.shape[1]) ** (1 / 3))]
 
     fails_output = output + 'genotype_errors.csv'
-    pd.DataFrame(genotype_fails).to_csv(fails_output)
+    df = pd.DataFrame.from_dict(genotype_fails)
+    df.to_csv(fails_output, index=False)
+    plt.hist(list(df.iloc[0]))
+    plt.savefig(output + 'genotype_error_distribution.png', )
 
 
-def args_parser():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-i", "--input", dest="input", help="input file in genepop (xlsx) format with raw sequencing")
-    parser.add_argument("-o", "--output", dest="output", help="NAme of output directory. Program will generate a new "
-                                                              "directory with that name, and all output files will be"
-                                                              " there")
-    parser.add_argument("-r", "--repeated", dest="repeated",  help="xlsx file of the repetition sequencing"
-                                                                   " (only individuals name)")
-    parser.add_argument("--args", dest="args", help="Any additional args")
-    options = parser.parse_args()
-    return options
 
 
 if __name__ == '__main__':
