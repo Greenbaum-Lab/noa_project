@@ -39,8 +39,14 @@ def mac_matrix2similarity_matrix(input_matrix, weighted=False):
 
 
 def similarity_to_csv(similarity_matrix, individual_names, output_path):
+    result_file = ""
+    for idx1, name1 in enumerate(individual_names):
+        for idx2, name2 in enumerate(individual_names[idx1 + 1:], start=idx1+1):
+            result_file += f"{name1},{name2},{similarity_matrix[idx1, idx2]}\n"
+    with open(output_path + '_pairs.csv', 'w') as f:
+        f.write(result_file[:-1])
     df = pd.DataFrame(data=similarity_matrix, columns=individual_names, index=individual_names)
-    df.to_csv(output_path, index_label="Name")
+    df.to_csv(output_path + '.csv', index_label="Name")
 
 
 def structure2genotype(file_path):
@@ -202,7 +208,7 @@ if __name__ == '__main__':
     matrix012 = genepop2012matrix(data, name_to_ref)
     matrix012 = pd.DataFrame.to_numpy(matrix012.drop(["ID"], axis=1))
     f_mu_similarity_matrix = mac_matrix2similarity_matrix(matrix012, weighted=False)
-    similarity_to_csv(f_mu_similarity_matrix, list(data.ID), arguments.output + 'f_mu_matrix.csv')
+    similarity_to_csv(f_mu_similarity_matrix, list(data.ID), arguments.output + 'f_mu_matrix')
     weighted_similarity_matrix = mac_matrix2similarity_matrix(matrix012, weighted=True)
-    similarity_to_csv(weighted_similarity_matrix, list(data.ID), arguments.output + 'weighted_f_mu_matrix.csv')
+    similarity_to_csv(weighted_similarity_matrix, list(data.ID), arguments.output + 'weighted_f_mu_matrix')
     print("Done!")
