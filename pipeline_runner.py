@@ -182,7 +182,7 @@ def compute_genotype_error(reapeted_file, input, output):
     same_counter = np.count_nonzero(max_min_diff == 0, axis=0)
     non_nan_counter = np.count_nonzero(~np.isnan(max_min_diff), axis=0)
     for idx, snp_name in enumerate(snp_names):
-        genotype_fails[snp_name] = [1 - (same_counter[idx] / non_nan_counter[idx] ** (1 / 3))]
+        genotype_fails[snp_name] = [1 - (same_counter[idx] / non_nan_counter[idx]) ** (1 / 3)]
 
     fails_output = output + 'genotype_errors.csv'
     df = pd.DataFrame.from_dict(genotype_fails)
