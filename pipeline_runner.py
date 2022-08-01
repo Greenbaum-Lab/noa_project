@@ -4,16 +4,16 @@ import os
 import pandas as pd
 from utils import read_df_file, args_parser
 import matplotlib.pyplot as plt
+import warnings
 
 
-def mac_matrix2similarity_matrix(input_matrix):
+def mac_matrix2similarity_matrix(input_matrix, weighted=False):
     """
     Get numpy array of input (count of ones of the alleles in 012 format). row per individual, column per site.
     Return similarity matrix (row for individual, column for individual)
     """
     input_matrix[input_matrix == -1] = np.nan
-    is_valid_window = (~np.isnan(input_matrix)).astype(np.uint8)
-
+    is_valid_window = (~np.isnan(input_matrix)).astype(np.uint16)
     window_pairwise_counts = is_valid_window @ is_valid_window.T
     # Trick to avoid computation of nan values one by one
     window0 = input_matrix.copy()
@@ -21,11 +21,17 @@ def mac_matrix2similarity_matrix(input_matrix):
     window2 = input_matrix.copy()
     window2[np.isnan(window2)] = 2
 
-    # Compute similarity
-    # first_element = (ref_freq * window0) @ window0.T
-    first_element = window0 @ window0.T
-    # second_element = (non_ref_freq * (2 - window2)) @ (2 - window2).T
-    second_element = (2 - window2) @ (2 - window2).T
+    if weighted:
+        num_valid_genotypes = np.sum(is_valid_window, axis=0)
+        non_ref_count = np.sum(input_matrix == 1, axis=0) + 2 * np.sum(input_matrix == 2, axis=0)
+        non_ref_freq = non_ref_count / (2 * num_valid_genotypes)
+        ref_freq = 1 - non_ref_freq
+        first_element = (ref_freq * window0) @ window0.T
+        second_element = (non_ref_freq * (2 - window2)) @ (2 - window2).T
+    else:
+        first_element = window0 @ window0.T * 2
+        second_element = (2 - window2) @ (2 - window2).T
+
     similarity = (first_element + second_element) / 4
     similarity = similarity / window_pairwise_counts
     np.fill_diagonal(similarity, -1)
@@ -75,15 +81,10 @@ def genotype2_mac_matrix(genotypes, individual_names):
     assert np.max(matrix012) <= 2, "ERROR Parsing STRUCTURE file"
     return matrix012.astype(float), output_individual_names
 
-def filter_bad_snps_and_samples(file_path, output_dir):
+
+def filter_bad_samples(file_path, output_dir):
     raw_data = read_df_file(file_path)
-    num_of_indv = len(raw_data.ID)
     num_of_snps = len(raw_data.columns) - 1  # -1 for ID column
-    snps_to_reomve = []
-    for c in raw_data.columns:
-        snp_fails_rate = sum(raw_data[c] == 'FAIL') / num_of_indv
-        if snp_fails_rate >= 0.34:
-            snps_to_reomve.append(c)
     individuals_to_remove = []
     for _, row in raw_data.iterrows():
         fails_rate = list(row).count('FAIL') / num_of_snps
@@ -93,25 +94,28 @@ def filter_bad_snps_and_samples(file_path, output_dir):
     with open(output_dir + 'individual_removed_by_fails.txt', "w+") as f:
         for indv in individuals_to_remove:
             f.write(f'{indv}\n')
-    with open(output_dir + 'snps_removed_by_fails.txt', "w+") as f:
-        for snp in snps_to_reomve:
-            f.write(f'{snp}\n')
-    # filtered_indv_df = raw_data[~raw_data["ID"].isin(individuals_to_remove)]
-    # filtered_df = filtered_indv_df.loc[:, ~filtered_indv_df.columns.isin(snps_to_reomve)]
-    filtered_df = raw_data.loc[:, ~raw_data.columns.isin(snps_to_reomve)]
-    filtered_path = output_dir + 'filtered_by_bad_snps.csv'
+    filtered_df = raw_data[~raw_data["ID"].isin(individuals_to_remove)]
+    filtered_path = output_dir + 'filtered.csv'
     filtered_df.to_csv(filtered_path, index=False)
     return filtered_path
 
 
-def remove_samples_by_fails(file_path, output):
-    unfiltered_data = read_df_file(file_path)
-    with open(output + 'individual_removed_by_fails.txt', 'r') as f:
-        individuals_to_remove_list = f.read().split('\n')
-    filtered_df = unfiltered_data[~unfiltered_data["ID"].isin(individuals_to_remove_list)]
-    filtered_path = output + 'filtered_by_bad_samples.csv'
-    filtered_df.to_csv(filtered_path, index=False)
+def filter_bad_SNPs(file_path, output_dir):
+    raw_data = read_df_file(file_path)
+    num_of_indv = len(raw_data.ID)
+    snps_to_reomve = []
+    for c in raw_data.columns:
+        snp_fails_rate = sum(raw_data[c] == 'FAIL') / num_of_indv
+        if snp_fails_rate >= 0.34:
+            snps_to_reomve.append(c)
 
+    with open(output_dir + 'snps_removed_by_fails.txt', "w+") as f:
+        for snp in snps_to_reomve:
+            f.write(f'{snp}\n')
+    filtered_df = raw_data.loc[:, ~raw_data.columns.isin(snps_to_reomve)]
+    filtered_path = output_dir + 'filtered_by_bad_snps.csv'
+    filtered_df.to_csv(filtered_path, index=False)
+    return filtered_path
 
 
 def assign_ref_allele(data_df):
@@ -128,6 +132,7 @@ def assign_ref_allele(data_df):
                 break
     return name_to_ref
 
+
 def genepop2012matrix(df, name_to_ref):
     minor_allele_count_df = df.copy()
     snps_names = list(df.columns)
@@ -139,9 +144,10 @@ def genepop2012matrix(df, name_to_ref):
             minor_allele_count_df[snp_name] = minor_allele_count_df[snp_name].apply(lambda x: np.nan)
     return minor_allele_count_df
 
+
 def compute_genotype_error(reapeted_file, input, output):
     """
-    Compute the genotype error value. There are 2 formulas
+    Compute the genotype error value by Alan computation.
     Args:
         reapeted_file:
         input:
@@ -170,7 +176,9 @@ def compute_genotype_error(reapeted_file, input, output):
     snp_names = list(data.columns)
     genotype_fails = {}
     snp_names.remove('ID')
-    max_min_diff = (np.max(d3_mat, axis=0) - np.min(d3_mat, axis=0)).astype(float)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="invalid value encountered in reduce")
+        max_min_diff = (np.max(d3_mat, axis=0) - np.min(d3_mat, axis=0)).astype(float)
     same_counter = np.count_nonzero(max_min_diff == 0, axis=0)
     non_nan_counter = np.count_nonzero(~np.isnan(max_min_diff), axis=0)
     for idx, snp_name in enumerate(snp_names):
@@ -183,14 +191,18 @@ def compute_genotype_error(reapeted_file, input, output):
     plt.savefig(output + 'genotype_error_distribution.png', )
 
 
-
-
 if __name__ == '__main__':
     arguments = args_parser()
-    filtered_path = filter_bad_snps_and_samples(arguments.input, arguments.output)
-    compute_genotype_error(arguments.repeated, filtered_path, arguments.output)
-    remove_samples_by_fails(arguments.output + 'filtered_by_bad_snps.csv', arguments.output)
-    # matrix012, individual_names = genotype2_mac_matrix(genotypes, individual_names)
-    # similarity_matrix = mac_matrix2similarity_matrix(matrix012)
-    # similarity_to_csv(similarity_matrix, individual_names, output_file_path)
-    # print("Done!")
+    os.makedirs(arguments.output, exist_ok=True)
+    filtered_snp_path = filter_bad_SNPs(arguments.input, arguments.output)
+    compute_genotype_error(arguments.repeated, filtered_snp_path, arguments.output)
+    filtered_path = filter_bad_samples(filtered_snp_path, arguments.output)
+    data = read_df_file(filtered_path)
+    name_to_ref = assign_ref_allele(data)
+    matrix012 = genepop2012matrix(data, name_to_ref)
+    matrix012 = pd.DataFrame.to_numpy(matrix012.drop(["ID"], axis=1))
+    f_mu_similarity_matrix = mac_matrix2similarity_matrix(matrix012, weighted=False)
+    similarity_to_csv(f_mu_similarity_matrix, list(data.ID), arguments.output + 'f_mu_matrix.csv')
+    weighted_similarity_matrix = mac_matrix2similarity_matrix(matrix012, weighted=True)
+    similarity_to_csv(weighted_similarity_matrix, list(data.ID), arguments.output + 'weighted_f_mu_matrix.csv')
+    print("Done!")
