@@ -85,16 +85,16 @@ def genotype2_mac_matrix(genotypes, individual_names):
 def filter_bad_samples(file_path, output_dir):
     raw_data = read_df_file(file_path)
     num_of_snps = len(raw_data.columns) - 1  # -1 for ID column
-    individuals_to_remove = []
+    individuals_to_remove = {}
     for _, row in raw_data.iterrows():
         fails_rate = list(row).count('FAIL') / num_of_snps
         if fails_rate >= 0.34:
-            individuals_to_remove.append(row.ID)
+            individuals_to_remove[row.ID] = fails_rate
     os.makedirs(output_dir, exist_ok=True)
     with open(output_dir + 'individual_removed_by_fails.txt', "w+") as f:
-        for indv in individuals_to_remove:
-            f.write(f'{indv}\n')
-    filtered_df = raw_data[~raw_data["ID"].isin(individuals_to_remove)]
+        for indv, val in individuals_to_remove.items():
+            f.write(f'{indv}, {val}\n')
+    filtered_df = raw_data[~raw_data["ID"].isin(set(list(individuals_to_remove.keys())))]
     filtered_path = output_dir + 'filtered.csv'
     filtered_df.to_csv(filtered_path, index=False)
     return filtered_path
@@ -103,16 +103,16 @@ def filter_bad_samples(file_path, output_dir):
 def filter_bad_SNPs(file_path, output_dir):
     raw_data = read_df_file(file_path)
     num_of_indv = len(raw_data.ID)
-    snps_to_reomve = []
+    snps_to_reomve = {}
     for c in raw_data.columns:
         snp_fails_rate = sum(raw_data[c] == 'FAIL') / num_of_indv
         if snp_fails_rate >= 0.34:
-            snps_to_reomve.append(c)
+            snps_to_reomve[c] = snp_fails_rate
 
     with open(output_dir + 'snps_removed_by_fails.txt', "w+") as f:
-        for snp in snps_to_reomve:
-            f.write(f'{snp}\n')
-    filtered_df = raw_data.loc[:, ~raw_data.columns.isin(snps_to_reomve)]
+        for snp, val in snps_to_reomve.items():
+            f.write(f'{snp}, {val}\n')
+    filtered_df = raw_data.loc[:, ~raw_data.columns.isin(set(list(snps_to_reomve.keys())))]
     filtered_path = output_dir + 'filtered_by_bad_snps.csv'
     filtered_df.to_csv(filtered_path, index=False)
     return filtered_path
