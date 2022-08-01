@@ -194,6 +194,7 @@ def compute_genotype_error(reapeted_file, input, output):
     df = pd.DataFrame.from_dict(genotype_fails)
     df.to_csv(fails_output, index=False)
     plt.hist(list(df.iloc[0]))
+    plt.yscale('log')
     plt.savefig(output + 'genotype_error_distribution.png', )
 
 
