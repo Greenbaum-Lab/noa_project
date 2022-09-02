@@ -2,9 +2,14 @@ import itertools
 import numpy as np
 import os
 import pandas as pd
+from tqdm import tqdm
+
 from utils import read_df_file, args_parser
 import matplotlib.pyplot as plt
+from scipy.special import factorial
+from scipy.stats import chisquare
 
+BRUTE_FORCE_ADMIXTURE_POISSONS = False
 
 def mac_matrix2similarity_matrix(input_matrix):
     """
@@ -139,7 +144,7 @@ def genepop2012matrix(df, name_to_ref):
             minor_allele_count_df[snp_name] = minor_allele_count_df[snp_name].apply(lambda x: np.nan)
     return minor_allele_count_df
 
-def compute_genotype_error(reapeted_file, input, output):
+def compute_genotype_error(reapeted_file, input_name, output):
     """
     Compute the genotype error value. There are 2 formulas
     Args:
@@ -153,7 +158,7 @@ def compute_genotype_error(reapeted_file, input, output):
     repeat = read_df_file(reapeted_file).dropna()
     if "ID" in list(repeat.iloc[0]):
         repeat = repeat.drop([min(repeat.index)])
-    data = pd.read_csv(input)
+    data = pd.read_csv(input_name)
     name_to_ref = assign_ref_allele(data)
     df_per_rep = {}
     for rep in repeat.columns:
@@ -169,27 +174,87 @@ def compute_genotype_error(reapeted_file, input, output):
     d3_mat = d3_mat[:, :, 1:]
     snp_names = list(data.columns)
     genotype_fails = {}
+    genotype_num_fails = {}
     snp_names.remove('ID')
     max_min_diff = (np.max(d3_mat, axis=0) - np.min(d3_mat, axis=0)).astype(float)
     same_counter = np.count_nonzero(max_min_diff == 0, axis=0)
     non_nan_counter = np.count_nonzero(~np.isnan(max_min_diff), axis=0)
+    num_of_misses = non_nan_counter - same_counter
+    if BRUTE_FORCE_ADMIXTURE_POISSONS:
+        mle_brute_force(num_of_misses)
     for idx, snp_name in enumerate(snp_names):
-        genotype_fails[snp_name] = [1 - (same_counter[idx] / non_nan_counter[idx] ** (1 / 3))]
+        genotype_fails[snp_name] = [1 - (same_counter[idx] / non_nan_counter[idx]) ** (1 / 3)]
+        genotype_num_fails[snp_name] = [num_of_misses[idx]]
 
     fails_output = output + 'genotype_errors.csv'
     df = pd.DataFrame.from_dict(genotype_fails)
     df.to_csv(fails_output, index=False)
+
+    fails_num_output = output + 'genotype_num_of_errors.csv'
+    df = pd.DataFrame.from_dict(genotype_num_fails)
+    df.to_csv(fails_num_output, index=False)
+
     plt.hist(list(df.iloc[0]))
     plt.savefig(output + 'genotype_error_distribution.png', )
 
 
+def compute_threshold(options):
+    input_name = options.output + 'genotype_num_of_errors.csv'
+    data = pd.read_csv(input_name)
+    missing_in_data = np.array(data.iloc[0]).astype(int)
+    MAX_MISSING = 21
+    k = np.arange(MAX_MISSING + 1)
+    e1_prefer = admixture_const_prob(k=k)
+    print(f"{np.max(np.where(e1_prefer > 0)[0])} is the highest value of misses to be accepted.")
+    class_probs = apply_admixture_prob_func(lambda1=0.4666666666666667,  lambda2=7.247474747474747, m=0.9494949494949496,
+                                            data=k, fac_data=factorial(k))
+    class_counts = np.histogram(missing_in_data, bins=np.arange(np.max(missing_in_data) + 2))[0]
+    print(chisquare(class_counts, class_probs))
 
+
+def mle_brute_force(data):
+    current_mle = -np.inf
+    mle_params = [None, None, None]
+    factorial_data = factorial(data)
+    for lambda1 in tqdm(np.linspace(start=0.4, stop=0.5, num=100)):
+        for lambda2 in np.linspace(start=7, stop=7.5, num=100):
+            for m in np.linspace(start=0, stop=1, num=100):
+                res = apply_admixture_prob_func(lambda1, lambda2, m, data, factorial_data)
+                if res > current_mle:
+                    current_mle = res
+                    mle_params = [lambda1, lambda2, m]
+
+    print(f"Highest loglikelihood is {current_mle}\n"
+          f"with lambda1={mle_params[0]}, lambda2={mle_params[1]}, m={mle_params[2]}")
+
+
+def apply_admixture_prob_func(lambda1, lambda2, m, data, fac_data):
+    e1 = m * (((lambda1 ** data) * (np.e ** - lambda1)) / fac_data)
+    e2 = (1-m) * (((lambda2 ** data) * (np.e ** - lambda2)) / fac_data)
+    return np.sum(np.log(e1 + e2))
+
+
+def admixture_const_prob(lambda1=0.4666666666666667,  lambda2=7.247474747474747, m=0.9494949494949496, k=None):
+    e1 = const_prob(lambda1, k, m)
+    e2 = const_prob(lambda2, k, m)
+    return e1 > e2
+
+def const_prob(lambda_x, k, m):
+    """
+    Compute P(I,K). Followed by base rules, if P(i,k) > P(j,k) then P(i|k) > P(j|k)
+    :param lambda_x:
+    :param k:
+    :param m:
+    :return:
+    """
+    return m * (((lambda_x ** k) * (np.e ** - lambda_x)) / factorial(k))
 
 if __name__ == '__main__':
     arguments = args_parser()
     filtered_path = filter_bad_snps_and_samples(arguments.input, arguments.output)
     compute_genotype_error(arguments.repeated, filtered_path, arguments.output)
-    remove_samples_by_fails(arguments.output + 'filtered_by_bad_snps.csv', arguments.output)
+    compute_threshold(arguments)
+    # remove_samples_by_fails(arguments.output + 'filtered_by_bad_snps.csv', arguments.output)
     # matrix012, individual_names = genotype2_mac_matrix(genotypes, individual_names)
     # similarity_matrix = mac_matrix2similarity_matrix(matrix012)
     # similarity_to_csv(similarity_matrix, individual_names, output_file_path)
