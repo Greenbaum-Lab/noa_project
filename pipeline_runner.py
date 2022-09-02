@@ -1,4 +1,6 @@
 import itertools
+import warnings
+
 import numpy as np
 import os
 import pandas as pd
@@ -154,7 +156,6 @@ def genepop2012matrix(df, name_to_ref):
             minor_allele_count_df[snp_name] = minor_allele_count_df[snp_name].apply(lambda x: np.nan)
     return minor_allele_count_df
 
-
 def compute_genotype_error(reapeted_file, input_name, output):
     """
     Compute the genotype error value by Alan computation.
@@ -187,7 +188,9 @@ def compute_genotype_error(reapeted_file, input_name, output):
     genotype_fails = {}
     genotype_num_fails = {}
     snp_names.remove('ID')
-    max_min_diff = (np.max(d3_mat, axis=0) - np.min(d3_mat, axis=0)).astype(float)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="invalid value encountered in reduce")
+        max_min_diff = (np.max(d3_mat, axis=0) - np.min(d3_mat, axis=0)).astype(float)
     same_counter = np.count_nonzero(max_min_diff == 0, axis=0)
     non_nan_counter = np.count_nonzero(~np.isnan(max_min_diff), axis=0)
     num_of_misses = non_nan_counter - same_counter
@@ -221,7 +224,7 @@ def compute_threshold(options):
     class_probs = apply_admixture_prob_func(lambda1=0.4666666666666667,  lambda2=7.247474747474747, m=0.9494949494949496,
                                             data=k, fac_data=factorial(k))
     class_counts = np.histogram(missing_in_data, bins=np.arange(np.max(missing_in_data) + 2))[0]
-    print(chisquare(class_counts, class_probs))
+    # print(chisquare(class_counts, class_probs))
 
 
 def mle_brute_force(data):
