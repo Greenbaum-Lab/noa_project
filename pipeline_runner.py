@@ -1,4 +1,3 @@
-import itertools
 import warnings
 
 import numpy as np
@@ -9,9 +8,7 @@ from tqdm import tqdm
 from utils import read_df_file, args_parser
 import matplotlib.pyplot as plt
 from scipy.special import factorial
-from scipy.stats import chisquare
 
-BRUTE_FORCE_ADMIXTURE_POISSONS = False
 
 def mac_matrix2similarity_matrix(input_matrix, weighted=False):
     """
@@ -45,6 +42,8 @@ def mac_matrix2similarity_matrix(input_matrix, weighted=False):
 
 
 def similarity_to_csv(similarity_matrix, individual_names, output_path):
+    if os.path.exists(output_path):
+        return
     result_file = ""
     for idx1, name1 in enumerate(individual_names):
         for idx2, name2 in enumerate(individual_names[idx1 + 1:], start=idx1+1):
@@ -94,25 +93,29 @@ def genotype2_mac_matrix(genotypes, individual_names):
     return matrix012.astype(float), output_individual_names
 
 
-def filter_bad_samples(file_path, output_dir):
-    raw_data = read_df_file(file_path)
-    num_of_snps = len(raw_data.columns) - 1  # -1 for ID column
+def filter_bad_samples(output):
+    filtered_path = output + 'filtered.csv'
+    if os.path.exists(filtered_path):
+        return filtered_path
+    snps_filtered_data = read_df_file(output + 'filtered_all_snps.csv')
+    num_of_snps = len(snps_filtered_data.columns) - 1  # -1 for ID column
     individuals_to_remove = {}
-    for _, row in raw_data.iterrows():
+    for _, row in snps_filtered_data.iterrows():
         fails_rate = list(row).count('FAIL') / num_of_snps
         if fails_rate >= 0.34:
             individuals_to_remove[row.ID] = fails_rate
-    os.makedirs(output_dir, exist_ok=True)
-    with open(output_dir + 'individual_removed_by_fails.txt', "w+") as f:
+    with open(output + 'individual_removed_by_fails.txt', "w+") as f:
         for indv, val in individuals_to_remove.items():
             f.write(f'{indv}, {val}\n')
-    filtered_df = raw_data[~raw_data["ID"].isin(set(list(individuals_to_remove.keys())))]
-    filtered_path = output_dir + 'filtered.csv'
+    filtered_df = snps_filtered_data[~snps_filtered_data["ID"].isin(set(list(individuals_to_remove.keys())))]
     filtered_df.to_csv(filtered_path, index=False)
     return filtered_path
 
 
 def filter_bad_SNPs(file_path, output_dir):
+    filtered_path = output_dir + 'filtered_by_bad_snps.csv'
+    if os.path.exists(filtered_path):
+        return filtered_path
     raw_data = read_df_file(file_path)
     num_of_indv = len(raw_data.ID)
     snps_to_reomve = {}
@@ -125,7 +128,6 @@ def filter_bad_SNPs(file_path, output_dir):
         for snp, val in snps_to_reomve.items():
             f.write(f'{snp}, {val}\n')
     filtered_df = raw_data.loc[:, ~raw_data.columns.isin(set(list(snps_to_reomve.keys())))]
-    filtered_path = output_dir + 'filtered_by_bad_snps.csv'
     filtered_df.to_csv(filtered_path, index=False)
     return filtered_path
 
@@ -167,12 +169,16 @@ def compute_genotype_error(reapeted_file, input_name, output):
     Returns:
 
     """
+    fails_num_output = output + 'genotype_num_of_errors.csv'
+    fails_output = output + 'genotype_errors.csv'
+    mle_text_path = output + "mixture_poisson_params.txt"
     repeat = read_df_file(reapeted_file).dropna()
     if "ID" in list(repeat.iloc[0]):
         repeat = repeat.drop([min(repeat.index)])
     data = pd.read_csv(input_name)
     name_to_ref = assign_ref_allele(data)
     df_per_rep = {}
+    num_of_repeats = len(list(repeat.columns))
     for rep in repeat.columns:
         rep_indv_names = list(repeat[rep])
         rep_data = data[data["ID"].isin(list(rep_indv_names))]
@@ -180,6 +186,9 @@ def compute_genotype_error(reapeted_file, input_name, output):
         df_per_rep[rep] = mac_matrix.reset_index()
     d3_mat = np.concatenate([np.expand_dims(pd.DataFrame.to_numpy(x), axis=0) for x in df_per_rep.values()], axis=0)
     d3_mat = d3_mat[:, :, 1:]
+    num_of_repeated_individuals = d3_mat.shape[1]
+    if all(os.path.exists(p) for p in [fails_output, fails_num_output, mle_text_path]):
+        return num_of_repeated_individuals, num_of_repeats
     for i in range(d3_mat.shape[1]):
         assert np.all(d3_mat[:, i, 0] == list(repeat.iloc[i])), f"line {i} is not aligned between repeats and matrix." \
                                                                 f"Developer bug. Contact Shahar"
@@ -194,54 +203,73 @@ def compute_genotype_error(reapeted_file, input_name, output):
     same_counter = np.count_nonzero(max_min_diff == 0, axis=0)
     non_nan_counter = np.count_nonzero(~np.isnan(max_min_diff), axis=0)
     num_of_misses = non_nan_counter - same_counter
-    if BRUTE_FORCE_ADMIXTURE_POISSONS:
-        mle_brute_force(num_of_misses)
+    mle_brute_force(num_of_misses, mle_text_path)
     for idx, snp_name in enumerate(snp_names):
-        genotype_fails[snp_name] = [1 - (same_counter[idx] / non_nan_counter[idx]) ** (1 / 3)]
+        genotype_fails[snp_name] = [1 - (same_counter[idx] / non_nan_counter[idx]) ** (1 / num_of_repeats)]
         genotype_num_fails[snp_name] = [num_of_misses[idx]]
 
-    fails_output = output + 'genotype_errors.csv'
     df = pd.DataFrame.from_dict(genotype_fails)
     df.to_csv(fails_output, index=False)
 
-    fails_num_output = output + 'genotype_num_of_errors.csv'
     df = pd.DataFrame.from_dict(genotype_num_fails)
     df.to_csv(fails_num_output, index=False)
 
-    plt.hist(list(df.iloc[0]))
-    plt.yscale('log')
-    plt.savefig(output + 'genotype_error_distribution.png', )
 
 
-def compute_threshold(options):
-    input_name = options.output + 'genotype_num_of_errors.csv'
-    data = pd.read_csv(input_name)
+def compute_threshold_and_filter_by(output, num_of_repeated_individuals, num_of_repeats):
+    filtered_all_snps_path = output + 'filtered_all_snps.csv'
+    if os.path.exists(filtered_all_snps_path):
+        return
+    input_name = output + 'genotype_num_of_errors.csv'
+    data = read_df_file(input_name)
     missing_in_data = np.array(data.iloc[0]).astype(int)
     MAX_MISSING = 21
     k = np.arange(MAX_MISSING + 1)
-    e1_prefer = admixture_const_prob(k=k)
-    print(f"{np.max(np.where(e1_prefer > 0)[0])} is the highest value of misses to be accepted.")
-    class_probs = apply_admixture_prob_func(lambda1=0.4666666666666667,  lambda2=7.247474747474747, m=0.9494949494949496,
-                                            data=k, fac_data=factorial(k))
-    class_counts = np.histogram(missing_in_data, bins=np.arange(np.max(missing_in_data) + 2))[0]
-    # print(chisquare(class_counts, class_probs))
+    with open(output + "mixture_poisson_params.txt", "r") as f:
+        mle_txt = f.read().split()
+
+    e1_prefer = admixture_const_prob(lambda1=float(mle_txt[0]), lambda2=float(mle_txt[1]), m=float(mle_txt[2]), k=k)
+    max_num_of_accepted_errors = np.max(np.where(e1_prefer > 0)[0])
+    print(f"{max_num_of_accepted_errors} is the highest value of misses to be accepted.")
+    datat = data.T
+    filter_SNP_names = list((datat[datat[0] > max_num_of_accepted_errors]).index)
+    with open(output + "snps_removed_by_genotype_error.txt", "w") as f:
+        f.write('\n'.join(filter_SNP_names))
+    half_filtered_data = read_df_file(output + 'filtered_by_bad_snps.csv')
+    filter_ge_snps = half_filtered_data.drop(filter_SNP_names, axis=1)
+    filter_ge_snps.to_csv(filtered_all_snps_path, index=False)
+    mle_for_single_poisson = np.mean(missing_in_data[missing_in_data <= max_num_of_accepted_errors])
+    est_ge = 1 - ((num_of_repeated_individuals - mle_for_single_poisson) / num_of_repeated_individuals) ** (1 / num_of_repeats)
+    print(f"Estimated genotype error for remaining SNPS is {est_ge}")
 
 
-def mle_brute_force(data):
+
+
+
+def mle_brute_force(data, output_path):
     current_mle = -np.inf
     mle_params = [None, None, None]
     factorial_data = factorial(data)
-    for lambda1 in tqdm(np.linspace(start=0.4, stop=0.5, num=100)):
-        for lambda2 in np.linspace(start=7, stop=7.5, num=100):
-            for m in np.linspace(start=0, stop=1, num=100):
-                res = apply_admixture_prob_func(lambda1, lambda2, m, data, factorial_data)
-                if res > current_mle:
-                    current_mle = res
-                    mle_params = [lambda1, lambda2, m]
+    lambda_1_center = 2.01
+    lambda_2_center = 10
+    lambda_1_eps = [2, 0.4, 0.05]
+    lambda_2_eps = [9, 2, 0.1]
+    print("Computing MLE for multi poisson distribution - this will take a few minutes")
+    for iter in tqdm(range(3)):
+        for lambda1 in tqdm(np.linspace(start=lambda_1_center - lambda_1_eps[iter], stop=lambda_1_center + lambda_1_eps[iter], num=100), leave=False):
+            for lambda2 in np.linspace(start=lambda_2_center - lambda_2_eps[iter], stop=lambda_2_center + lambda_2_eps[iter], num=100):
+                for m in np.linspace(start=0, stop=1, num=100 * (iter + 1)):
+                    res = apply_admixture_prob_func(lambda1, lambda2, m, data, factorial_data)
+                    if res > current_mle:
+                        current_mle = res
+                        mle_params = [lambda1, lambda2, m]
+        print(mle_params)
+        lambda_1_center = mle_params[0]
+        lambda_2_center = mle_params[1]
 
-    print(f"Highest loglikelihood is {current_mle}\n"
-          f"with lambda1={mle_params[0]}, lambda2={mle_params[1]}, m={mle_params[2]}")
-
+    print(f"Done! with lambda1={mle_params[0]}, lambda2={mle_params[1]}, m={mle_params[2]}")
+    with open(output_path, "w") as f:
+        f.write('\n'.join([str(e) for e in mle_params]))
 
 def apply_admixture_prob_func(lambda1, lambda2, m, data, fac_data):
     e1 = m * (((lambda1 ** data) * (np.e ** - lambda1)) / fac_data)
@@ -249,7 +277,7 @@ def apply_admixture_prob_func(lambda1, lambda2, m, data, fac_data):
     return np.sum(np.log(e1 + e2))
 
 
-def admixture_const_prob(lambda1=0.4666666666666667,  lambda2=7.247474747474747, m=0.9494949494949496, k=None):
+def admixture_const_prob(lambda1,  lambda2, m, k=None):
     e1 = const_prob(lambda1, k, m)
     e2 = const_prob(lambda2, k, m)
     return e1 > e2
@@ -268,15 +296,19 @@ if __name__ == '__main__':
     arguments = args_parser()
     os.makedirs(arguments.output, exist_ok=True)
     filtered_snp_path = filter_bad_SNPs(arguments.input, arguments.output)
-    compute_genotype_error(arguments.repeated, filtered_snp_path, arguments.output)
-    compute_threshold(arguments)
-    filtered_path = filter_bad_samples(filtered_snp_path, arguments.output)
+    num_of_repeated_individuals, num_of_repeats = compute_genotype_error(arguments.repeated, filtered_snp_path, arguments.output)
+    compute_threshold_and_filter_by(arguments.output, num_of_repeated_individuals, num_of_repeats)
+    filtered_path = filter_bad_samples(arguments.output)
     data = read_df_file(filtered_path)
     name_to_ref = assign_ref_allele(data)
     matrix012 = genepop2012matrix(data, name_to_ref)
     matrix012 = pd.DataFrame.to_numpy(matrix012.drop(["ID"], axis=1))
-    f_mu_similarity_matrix = mac_matrix2similarity_matrix(matrix012, weighted=False)
-    similarity_to_csv(f_mu_similarity_matrix, list(data.ID), arguments.output + 'f_mu_matrix')
-    weighted_similarity_matrix = mac_matrix2similarity_matrix(matrix012, weighted=True)
-    similarity_to_csv(weighted_similarity_matrix, list(data.ID), arguments.output + 'weighted_f_mu_matrix')
+    f_mu_matrix_path = arguments.output + 'f_mu_matrix'
+    if not os.path.exists(f_mu_matrix_path):
+        f_mu_similarity_matrix = mac_matrix2similarity_matrix(matrix012, weighted=False)
+        similarity_to_csv(f_mu_similarity_matrix, list(data.ID), f_mu_matrix_path)
+    weighted_f_mu_matrix_path = arguments.output + 'weighted_f_mu_matrix'
+    if not os.path.exists(weighted_f_mu_matrix_path):
+        weighted_similarity_matrix = mac_matrix2similarity_matrix(matrix012, weighted=True)
+        similarity_to_csv(weighted_similarity_matrix, list(data.ID), weighted_f_mu_matrix_path)
     print("Done!")
