@@ -12,7 +12,7 @@ This will make your life easier if you have mid-results, since it can skip steps
 
 2. -i input file name of the sequenced data. Should be csv or xlsx file. The format was provided by Noa Kan.
 
-3. -r Repeats file. Again csv or xlsx file by the format that was given by Noa Kan.
+3. -r Repeats file [Optional]. Csv or Xlsx file by the format that was given by Noa Kan.
 
 The script should be able to run easily with any OS and any Python 3 with some standard packages. It was tested with Python 3.8.
 
@@ -27,10 +27,10 @@ The script should be able to run easily with any OS and any Python 3 with some s
 5. Filter SNPs by the threshold, and compute a new genotype error based on the SNPS left with a single poisson distribution.
 6. Filter samples with >34% missing data.
 7. Assign a "ref" allele for every SNP and generate 012 matrix
-8. Compute f_mu_matrix (f_mu score EQ 4 in https://www.ncbi.nlm.nih.gov/pmc/articles/PMC1461426/ )
+8. Compute f_mu_matrix - EQ 4 in https://www.ncbi.nlm.nih.gov/pmc/articles/PMC1461426/ 
 9. Compute weighted f_mu score - Gili's score from https://academic.oup.com/genetics/article/202/4/1299/5930174?login=false
 
-
+* If Repeats file is missing, we skip steps 2-5 and use the output from step 1 from step 6. 
 ### Output files 
 All outputs will be find in the output directory provided with -o.
 
@@ -56,4 +56,11 @@ f_mu_matrix_pairs.csv - same matrix but each line is pair of individual and thei
 8.weighted_f_mu_matrix.csv - matrix of distances based on weighted f_mu metric.
 weighted_f_mu_matrix_pairs.csv - same matrix but each line is pair of individual and their similarity 
 
+###Computing Similarity
 
+It is possible to filter the data yourself and use this script just to compute a similarity matrix of the data.
+
+In order to do that, run "compute_similarity.py" script (instead of pipeline_runner.py, because, well, 
+we don't run the whole pipeline).
+Give with -i the path to your data csv file like in the pipeline_runner, and -o with output path of an directory (might be not exists yet).
+The script will write the files in points 7,8 in "Output files" section in your output directory. 

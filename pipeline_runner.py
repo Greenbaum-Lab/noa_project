@@ -215,7 +215,6 @@ def compute_genotype_error(reapeted_file, input_name, output):
     df.to_csv(fails_num_output, index=False)
 
 
-
 def compute_threshold_and_filter_by(output, num_of_repeated_individuals, num_of_repeats):
     filtered_all_snps_path = output + 'filtered_all_snps.csv'
     if os.path.exists(filtered_all_snps_path):
@@ -243,9 +242,6 @@ def compute_threshold_and_filter_by(output, num_of_repeated_individuals, num_of_
     print(f"Estimated genotype error for remaining SNPS is {est_ge}")
 
 
-
-
-
 def mle_brute_force(data, output_path):
     current_mle = -np.inf
     mle_params = [None, None, None]
@@ -258,6 +254,8 @@ def mle_brute_force(data, output_path):
     for iter in tqdm(range(3)):
         for lambda1 in tqdm(np.linspace(start=lambda_1_center - lambda_1_eps[iter], stop=lambda_1_center + lambda_1_eps[iter], num=100), leave=False):
             for lambda2 in np.linspace(start=lambda_2_center - lambda_2_eps[iter], stop=lambda_2_center + lambda_2_eps[iter], num=100):
+                if np.min([lambda1, lambda2]) <= 0:
+                    continue
                 for m in np.linspace(start=0, stop=1, num=100 * (iter + 1)):
                     res = apply_admixture_prob_func(lambda1, lambda2, m, data, factorial_data)
                     if res > current_mle:
@@ -292,23 +290,30 @@ def const_prob(lambda_x, k, m):
     """
     return m * (((lambda_x ** k) * (np.e ** - lambda_x)) / factorial(k))
 
+
+def filtered_data2similarity(data, output):
+    name_to_ref = assign_ref_allele(data)
+    matrix012 = genepop2012matrix(data, name_to_ref)
+    matrix012 = pd.DataFrame.to_numpy(matrix012.drop(["ID"], axis=1))
+    f_mu_matrix_path = output + 'f_mu_matrix'
+    if not os.path.exists(f_mu_matrix_path):
+        f_mu_similarity_matrix = mac_matrix2similarity_matrix(matrix012, weighted=False)
+        similarity_to_csv(f_mu_similarity_matrix, list(data.ID), f_mu_matrix_path)
+    weighted_f_mu_matrix_path = output + 'weighted_f_mu_matrix'
+    if not os.path.exists(weighted_f_mu_matrix_path):
+        weighted_similarity_matrix = mac_matrix2similarity_matrix(matrix012, weighted=True)
+        similarity_to_csv(weighted_similarity_matrix, list(data.ID), weighted_f_mu_matrix_path)
+
 if __name__ == '__main__':
     arguments = args_parser()
     os.makedirs(arguments.output, exist_ok=True)
     filtered_snp_path = filter_bad_SNPs(arguments.input, arguments.output)
-    num_of_repeated_individuals, num_of_repeats = compute_genotype_error(arguments.repeated, filtered_snp_path, arguments.output)
-    compute_threshold_and_filter_by(arguments.output, num_of_repeated_individuals, num_of_repeats)
-    filtered_path = filter_bad_samples(arguments.output)
+    if arguments.repeated:
+        num_of_repeated_individuals, num_of_repeats = compute_genotype_error(arguments.repeated, filtered_snp_path, arguments.output)
+        compute_threshold_and_filter_by(arguments.output, num_of_repeated_individuals, num_of_repeats)
+        filtered_path = filter_bad_samples(arguments.output)
+    else:
+        filtered_path = filtered_snp_path
     data = read_df_file(filtered_path)
-    name_to_ref = assign_ref_allele(data)
-    matrix012 = genepop2012matrix(data, name_to_ref)
-    matrix012 = pd.DataFrame.to_numpy(matrix012.drop(["ID"], axis=1))
-    f_mu_matrix_path = arguments.output + 'f_mu_matrix'
-    if not os.path.exists(f_mu_matrix_path):
-        f_mu_similarity_matrix = mac_matrix2similarity_matrix(matrix012, weighted=False)
-        similarity_to_csv(f_mu_similarity_matrix, list(data.ID), f_mu_matrix_path)
-    weighted_f_mu_matrix_path = arguments.output + 'weighted_f_mu_matrix'
-    if not os.path.exists(weighted_f_mu_matrix_path):
-        weighted_similarity_matrix = mac_matrix2similarity_matrix(matrix012, weighted=True)
-        similarity_to_csv(weighted_similarity_matrix, list(data.ID), weighted_f_mu_matrix_path)
+    filtered_data2similarity(data, arguments.output)
     print("Done!")
